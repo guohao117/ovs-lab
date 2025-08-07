@@ -6,6 +6,10 @@
 # A basic 3-container setup for OVS testing and experimentation
 # =============================================================================
 
+# Load OVS helper functions
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+source "$SCRIPT_DIR/../../lib/ovs-helpers.sh"
+
 # Playground metadata
 PLAYGROUND_NAME="Simple 3-Container Lab"
 PLAYGROUND_DESCRIPTION="Basic setup with 3 containers for testing connectivity and flow rules"

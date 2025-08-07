@@ -8,6 +8,12 @@ set -euo pipefail
 # with Docker containers for network testing and experimentation.
 # =============================================================================
 
+# Load OVS helper functions
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+if [[ -f "$SCRIPT_DIR/lib/ovs-helpers.sh" ]]; then
+    source "$SCRIPT_DIR/lib/ovs-helpers.sh"
+fi
+
 # Global Configuration
 readonly SCRIPT_NAME="OVS Lab Manager"
 readonly BRIDGE_NAME_DEFAULT="br-lab"
@@ -225,10 +231,9 @@ set_container_ofport() {
         return 0
     fi
 
-    # Find the interface name for this container
+    # Use helper function to find the interface name
     local interface_name
-    interface_name=$(ovs-vsctl --data=bare --no-heading --columns=name find Interface \
-        external_ids:container_id="$container" external_ids:container_iface=eth0 2>/dev/null)
+    interface_name=$(get_port_name "$container")
 
     if [[ -z "$interface_name" ]]; then
         log ERROR "Failed to find interface for container $container"
@@ -717,6 +722,87 @@ enter_container() {
         docker exec -it "$container" /bin/sh
 }
 
+# Execute command in container (non-interactive)
+# Usage: exec_container_command [--interactive|-i] [--tty|-t] <container> <command> [args...]
+exec_container_command() {
+    local interactive=false
+    local tty=false
+    local docker_flags=()
+    
+    # Parse flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --interactive|-i)
+                interactive=true
+                docker_flags+=("-i")
+                shift
+                ;;
+            --tty|-t)
+                tty=true
+                docker_flags+=("-t")
+                shift
+                ;;
+            --it|-it)
+                interactive=true
+                tty=true
+                docker_flags+=("-it")
+                shift
+                ;;
+            -*)
+                log ERROR "Unknown flag: $1"
+                log INFO "Supported flags: --interactive/-i, --tty/-t, --it/-it"
+                return 1
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+    
+    local container="$1"
+    shift # Remove container name from arguments
+
+    if [[ -z "$container" ]]; then
+        log ERROR "Container name required"
+        log INFO "Usage: exec [--interactive|-i] [--tty|-t] <container> <command> [args...]"
+        return 1
+    fi
+
+    # Auto-load current playground configuration
+    auto_load_current_playground
+
+    # Validate container name
+    if ! validate_container "$container"; then
+        return 1
+    fi
+
+    if ! is_container_running "$container"; then
+        log ERROR "Container $container is not running"
+        return 1
+    fi
+
+    # Build docker exec command
+    local docker_cmd=(docker exec)
+    
+    # Add flags if specified
+    if [[ ${#docker_flags[@]} -gt 0 ]]; then
+        docker_cmd+=("${docker_flags[@]}")
+    fi
+    
+    docker_cmd+=("$container")
+    docker_cmd+=("$@")
+
+    # Show what we're executing
+    if [[ $interactive == true || $tty == true ]]; then
+        log INFO "Executing interactive command in container $container: $*"
+    else
+        log INFO "Executing command in container $container: $*"
+    fi
+    
+    # Execute the command
+    "${docker_cmd[@]}"
+}
+
 # Execute command in container
 exec_in_container() {
     # Auto-load current playground configuration
@@ -788,6 +874,20 @@ select_container() {
 show_lab_status() {
     echo -e "\n${CYAN}==================== Lab Status ====================${NC}"
 
+    # Playground information
+    local current_pg
+    current_pg=$(get_current_playground)
+    if [[ -n "$current_pg" && "$current_pg" != "[]" && "$current_pg" != "default" ]]; then
+        echo -e "${MAGENTA}Active Playground:${NC} $current_pg"
+        if [[ -n "$PLAYGROUND_NAME" ]]; then
+            echo -e "${MAGENTA}Description:${NC} $PLAYGROUND_NAME"
+        fi
+    elif [[ "$current_pg" == "default" ]]; then
+        echo -e "${MAGENTA}Active Playground:${NC} ${YELLOW}default (no specific playground)${NC}"
+    else
+        echo -e "${MAGENTA}Active Playground:${NC} ${YELLOW}none detected${NC}"
+    fi
+
     # Bridge status
     if bridge_exists; then
         echo -e "${GREEN}✓${NC} Bridge: $BRIDGE_NAME (active)"
@@ -838,10 +938,10 @@ show_port_info() {
         return 0
     fi
 
-    # Get detailed information for each container
+    # Get detailed information for each container using helper function
     for container in "${CONTAINERS[@]}"; do
         local ofport
-        ofport=$(ovs-vsctl --data=bare --no-heading --columns=ofport find Interface external_ids:container_id="$container" external_ids:container_iface=eth0 2>/dev/null)
+        ofport=$(get_container_ofport "$container")
 
         if [[ -n "$ofport" && "$ofport" != "[]" ]]; then
             echo -e "  ${container}: ofport=${ofport}"
@@ -1008,6 +1108,30 @@ main() {
             show_lab_status
             exit 0
             ;;
+        exec)
+            check_permissions || exit 1
+            if [[ $# -lt 2 ]]; then
+                echo "Usage: $0 exec [--interactive|-i] [--tty|-t] <container> <command> [args...]"
+                echo ""
+                echo "Flags:"
+                echo "  --interactive, -i    Keep STDIN open even if not attached"
+                echo "  --tty, -t           Allocate a pseudo-TTY"
+                echo "  --it, -it           Shorthand for --interactive --tty"
+                echo ""
+                echo "Examples:"
+                echo "  $0 exec c1 ping 10.0.0.2                    # Basic command"
+                echo "  $0 exec -it c1 bash                         # Interactive shell"
+                echo "  $0 exec --tty c1 top                        # With TTY for colors"
+                echo "  $0 exec --interactive c1 cat > /tmp/file    # Keep STDIN open"
+                echo ""
+                auto_load_current_playground >/dev/null 2>&1
+                echo "Available containers: ${CONTAINERS[*]}"
+                exit 1
+            fi
+            shift # Remove 'exec' from arguments
+            exec_container_command "$@"
+            exit $?
+            ;;
         list|--list)
             list_playgrounds
             exit 0
@@ -1016,12 +1140,18 @@ main() {
             echo "Usage: $0 [COMMAND]"
             echo ""
             echo "Commands:"
-            echo "  setup, -s [PLAYGROUND]    Setup the lab environment"
-            echo "                           Optional: specify playground name"
-            echo "  destroy, -d              Destroy the lab environment"
-            echo "  status                   Show lab status"
-            echo "  list                     List available playgrounds"
-            echo "  help, -h                 Show this help message"
+            echo "  setup, -s [PLAYGROUND]           Setup the lab environment"
+            echo "                                  Optional: specify playground name"
+            echo "  destroy, -d                     Destroy the lab environment"
+            echo "  status                          Show lab status"
+            echo "  exec [flags] <container> <cmd>  Execute command in container"
+            echo "  list                            List available playgrounds"
+            echo "  help, -h                        Show this help message"
+            echo ""
+            echo "Exec flags:"
+            echo "  --interactive, -i               Keep STDIN open even if not attached"
+            echo "  --tty, -t                       Allocate a pseudo-TTY"
+            echo "  --it, -it                       Shorthand for --interactive --tty"
             echo ""
             echo "Setup:"
             echo "  1. Ensure user has docker access (add to docker group if needed)"
@@ -1030,9 +1160,13 @@ main() {
             echo "     (some network operations may still prompt for sudo)"
             echo ""
             echo "Examples:"
-            echo "  ./lab.sh setup simple    # Load simple playground"
-            echo "  ./lab.sh setup vlan      # Load VLAN playground"
-            echo "  ./lab.sh list            # Show available playgrounds"
+            echo "  ./lab.sh setup simple                      # Load simple playground"
+            echo "  ./lab.sh setup vlan                        # Load VLAN playground"
+            echo "  ./lab.sh exec c1 ping 10.0.0.2             # Execute ping in container c1"
+            echo "  ./lab.sh exec -it vlan10-c1 bash           # Interactive shell in container"
+            echo "  ./lab.sh exec --tty c1 htop                # Run htop with TTY support"
+            echo "  ./lab.sh exec --interactive c1 'cat > file' # Keep STDIN open for input"
+            echo "  ./lab.sh list                              # Show available playgrounds"
             echo ""
             echo "If no command is provided, interactive mode will start."
             echo ""
