@@ -44,7 +44,7 @@ sudo chmod +x /usr/local/bin/ovs-docker
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/ovs-lab.git
+git clone https://github.com/guohao117/ovs-lab.git
 cd ovs-lab
 chmod +x lab.sh
 ```
