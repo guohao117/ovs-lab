@@ -18,7 +18,8 @@ A comprehensive lab management tool for OpenVSwitch (OVS) network experimentatio
 ### 🔧 Advanced Features
 - **VLAN Support**: Complete VLAN configuration including access and trunk ports
 - **Permission Management**: Automated OVS permission setup for non-root users
-- **Flow Management**: Built-in OpenFlow rule management and examples
+- **Flow Management**: Playground-owned OpenFlow rules loaded from per-playground flows/ directories (no global example injection)
+- **Hooks System**: Optional hooks.d scripts for custom pre/post actions
 - **Network Testing**: Automated connectivity testing between containers
 - **Extensible Architecture**: Easy to add new playgrounds and configurations
 
@@ -106,11 +107,29 @@ Advanced VLAN segmentation demonstration:
 ./lab.sh exec --interactive <container> cat   # Keep STDIN open
 ```
 
-### Flow Management (Interactive Mode)
-- Show current flows
-- Add/remove flows
-- Learning switch setup
-- Example flow demonstrations
+### Flow / Hooks Management
+Playgrounds can now fully own their flow rules and custom logic:
+```
+playgrounds/<name>/
+  config.sh          # Variables & metadata
+  flows/             # *.flow or any files with rule lines (one rule per line)
+  hooks.d/           # Optional executable *.sh scripts (ordered by filename)
+```
+Usage:
+```bash
+./lab.sh flows <playground>   # Flush existing flows and apply playground flow files
+```
+Rules: non-empty, non-comment lines are passed directly to `ovs-ofctl add-flow` after an automatic flush.
+
+### OpenFlow Rules
+```bash
+# Apply (or reapply) flows defined by current playground
+./lab.sh flows simple
+
+# Manually inspect flows
+./lab.sh status   # shows flow count
+./lab.sh          # interactive menu -> Show flows
+```
 
 ## Architecture
 
@@ -176,14 +195,12 @@ ovs-lab/
 
 ### OpenFlow Rules
 ```bash
-# Enter interactive mode
-./lab.sh
+# Apply (or reapply) flows defined by current playground
+./lab.sh flows simple
 
-# Use menu options to:
-# - View current flows
-# - Add learning switch flows  
-# - Create custom flow rules
-# - Test connectivity changes
+# Manually inspect flows
+./lab.sh status   # shows flow count
+./lab.sh          # interactive menu -> Show flows
 ```
 
 ## Creating Custom Playgrounds
@@ -242,6 +259,31 @@ This playground demonstrates...
 EOH
 }
 EOF
+```
+
+### Optional: Add Flows
+```bash
+mkdir -p playgrounds/mylab/flows
+cat > playgrounds/mylab/flows/base.rules <<'EOF'
+# Example flow rules (one per line, comments ignored)
+priority=100,in_port=10,actions=output:30
+priority=100,in_port=20,actions=output:30
+priority=90,in_port=30,ip,nw_dst=192.168.1.10,actions=output:10
+priority=90,in_port=30,ip,nw_dst=192.168.2.10,actions=output:20
+priority=0,actions=drop
+EOF
+
+# Apply them
+./lab.sh flows mylab
+```
+### Optional: Hooks
+```bash
+mkdir -p playgrounds/mylab/hooks.d
+cat > playgrounds/mylab/hooks.d/90-post.sh <<'EOF'
+#!/bin/bash
+echo "[mylab hook] Post-setup running: bridge=$2"
+EOF
+chmod +x playgrounds/mylab/hooks.d/90-post.sh
 ```
 
 ### 3. Use Your Playground

@@ -274,25 +274,48 @@ set_playground_state() {
     fi
 }
 
+# Store additional playground metadata (name, version, description snippet)
+set_playground_metadata() {
+    bridge_exists || return 0
+    [[ -z "$CURRENT_PLAYGROUND" ]] && return 0
+    local args=()
+    [[ -n "$PLAYGROUND_NAME" ]] && args+=(external_ids:playground_name="$PLAYGROUND_NAME")
+    [[ -n "$PLAYGROUND_VERSION" ]] && args+=(external_ids:playground_version="$PLAYGROUND_VERSION")
+    if [[ -n "$PLAYGROUND_DESCRIPTION" ]]; then
+        local desc="${PLAYGROUND_DESCRIPTION:0:120}"
+        args+=(external_ids:playground_desc="$desc")
+    fi
+    if [[ ${#args[@]} -gt 0 ]]; then
+        ovs-vsctl set bridge "$BRIDGE_NAME" "${args[@]}" &>/dev/null || return 0
+        log DEBUG "Playground metadata annotated"
+    fi
+}
+
 # Get current playground from bridge external_ids
 get_current_playground() {
     if bridge_exists; then
-        ovs-vsctl --data=bare --no-heading get bridge "$BRIDGE_NAME" external_ids:playground 2>/dev/null | tr -d '"'
+        # Be tolerant: if key missing, ovs-vsctl exits non-zero; we must not propagate under set -e
+        local val
+        val=$(ovs-vsctl --data=bare --no-heading get bridge "$BRIDGE_NAME" external_ids:playground 2>/dev/null || true)
+        # Trim quotes/newlines
+        printf '%s' "$val" | tr -d '"' || true
     fi
+    return 0
 }
 
 # Auto-load current playground configuration
 auto_load_current_playground() {
-    local current_pg
-    current_pg=$(get_current_playground)
+    local current_pg=""
+    current_pg=$(get_current_playground || true)
 
     if [[ -n "$current_pg" && "$current_pg" != "[]" ]]; then
         log INFO "Detected active playground: $current_pg"
         if load_playground "$current_pg"; then
             return 0
         else
-            log WARN "Failed to load detected playground: $current_pg"
-            return 1
+            log WARN "Failed to load detected playground: $current_pg (falling back to default)"
+            set_default_config
+            return 0
         fi
     else
         log INFO "No active playground detected, using default configuration"
@@ -504,12 +527,19 @@ setup_lab() {
     # Run playground-specific setup if available
     playground_setup_hook
 
-    # Save playground state to bridge
+    # Persist playground state early
     if [[ -n "$CURRENT_PLAYGROUND" ]]; then
         set_playground_state "$CURRENT_PLAYGROUND"
+        set_playground_metadata || true
     else
         set_playground_state "default"
     fi
+
+    # Hooks post-setup
+    run_playground_hooks post
+
+    # Apply flows owned by playground (after state & metadata saved)
+    apply_playground_flows "$CURRENT_PLAYGROUND"
 
     log SUCCESS "OVS lab setup complete!"
     if [[ -n "$CURRENT_PLAYGROUND" ]]; then
@@ -517,6 +547,69 @@ setup_lab() {
     fi
     log INFO "You can now run lab commands without sudo"
     show_lab_status
+}
+
+# Playground hook execution (hooks.d/*.sh)
+run_playground_hooks() {
+    local stage="$1" # pre|post
+    local playground_path="$PLAYGROUND_DIR/$CURRENT_PLAYGROUND"
+    local hooks_dir="$playground_path/hooks.d"
+    [[ -z "$CURRENT_PLAYGROUND" || ! -d "$hooks_dir" ]] && return 0
+    # stage filtering can be added later; for now run all executable scripts
+    for script in $(find "$hooks_dir" -maxdepth 1 -type f -name "*.sh" | sort); do
+        if [[ -x "$script" ]]; then
+            log INFO "Running hook: $(basename "$script")"
+            if ! "$script" "$stage" "$BRIDGE_NAME"; then
+                log WARN "Hook $(basename "$script") reported non-zero exit"
+            fi
+        fi
+    done
+}
+
+# Apply flows from playground flows directory
+apply_playground_flows() {
+    auto_load_current_playground
+    if ! bridge_exists; then
+        log ERROR "Bridge $BRIDGE_NAME does not exist"
+        return 1
+    fi
+    local playground="${1:-$CURRENT_PLAYGROUND}"
+    if [[ -z "$playground" || "$playground" == "default" ]]; then
+        log WARN "No specific playground selected; skipping external flows"
+        return 0
+    fi
+    local flows_dir="$PLAYGROUND_DIR/$playground/flows"
+    if [[ ! -d "$flows_dir" ]]; then
+        log INFO "No flows directory: $flows_dir"
+        return 0
+    fi
+    local flow_files=()
+    while IFS= read -r -d '' f; do flow_files+=("$f"); done < <(find "$flows_dir" -maxdepth 1 -type f ! -name 'README*' -print0 | sort -z)
+    if [[ ${#flow_files[@]} -eq 0 ]]; then
+        log INFO "No flow files to apply in $flows_dir"
+        return 0
+    fi
+    log INFO "Applying flows from $flows_dir (${#flow_files[@]} files)"
+    # Flush existing flows first (playground owns flows)
+    flush_flows
+    local applied=0 failed=0
+    for file in "${flow_files[@]}"; do
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line%%#*}" # strip trailing comment
+            line="${line//[$'\t\r\n ']}" # trim simple whitespace ends for empty detection
+            if [[ -z "$line" ]]; then
+                continue
+            fi
+            if ovs-ofctl add-flow "$BRIDGE_NAME" "$line" 2>/dev/null; then
+                ((applied++))
+            else
+                log WARN "Failed flow: $line"
+                ((failed++))
+            fi
+        done < "$file"
+    done
+    log SUCCESS "Flows applied: $applied (failed: $failed)"
+    return 0
 }
 
 # Cleanup containers and their connections
@@ -613,91 +706,9 @@ show_flows() {
     ovs-ofctl dump-flows "$BRIDGE_NAME" || log ERROR "Failed to dump flows"
 }
 
-# Add a simple learning switch flow
-# Add learning switch flows to bridge
-add_learning_flows() {
-    if ! bridge_exists; then
-        log ERROR "Bridge $BRIDGE_NAME does not exist"
-        return 1
-    fi
 
-    progress "Adding learning switch flows"
-    if ovs-ofctl add-flow "$BRIDGE_NAME" "table=0, priority=0, actions=flood" &>/dev/null; then
-        progress_done
-        log SUCCESS "Learning switch flows added"
-    else
-        progress_fail
-        log ERROR "Failed to add learning switch flows"
-        return 1
-    fi
-}
 
-# Add example flows demonstrating fixed ofport usage
-add_example_flows() {
-    if ! bridge_exists; then
-        log ERROR "Bridge $BRIDGE_NAME does not exist"
-        return 1
-    fi
 
-    echo -e "\n${CYAN}Adding example flows using fixed ofports...${NC}"
-
-    # Clear existing flows first
-    progress "Clearing existing flows"
-    if ovs-ofctl del-flows "$BRIDGE_NAME" &>/dev/null; then
-        progress_done
-    else
-        progress_fail
-        log ERROR "Failed to clear flows"
-        return 1
-    fi
-
-    # Add specific forwarding rules using fixed ofports
-    echo -e "${GREEN}Adding targeted forwarding rules:${NC}"
-
-    # c1 (ofport 101) -> c2 (ofport 102) for ICMP
-    progress "  c1 -> c2 (ICMP traffic)"
-    if ovs-ofctl add-flow "$BRIDGE_NAME" "in_port=101,icmp,actions=output:102" &>/dev/null; then
-        progress_done
-    else
-        progress_fail
-        return 1
-    fi
-
-    # c2 (ofport 102) -> c3 (ofport 103) for TCP traffic
-    progress "  c2 -> c3 (TCP traffic)"
-    if ovs-ofctl add-flow "$BRIDGE_NAME" "in_port=102,tcp,actions=output:103" &>/dev/null; then
-        progress_done
-    else
-        progress_fail
-        return 1
-    fi
-
-    # c3 (ofport 103) -> c1 (ofport 101) for UDP traffic
-    progress "  c3 -> c1 (UDP traffic)"
-    if ovs-ofctl add-flow "$BRIDGE_NAME" "in_port=103,udp,actions=output:101" &>/dev/null; then
-        progress_done
-    else
-        progress_fail
-        return 1
-    fi
-
-    # Default drop rule for demonstration
-    progress "  Adding default drop rule"
-    if ovs-ofctl add-flow "$BRIDGE_NAME" "priority=0,actions=drop" &>/dev/null; then
-        progress_done
-    else
-        progress_fail
-        return 1
-    fi
-
-    echo -e "\n${GREEN}Example flows added successfully!${NC}"
-    echo -e "${YELLOW}These flows demonstrate the value of fixed ofports:${NC}"
-    echo -e "  • c1 (ofport 101) -> c2 (ofport 102) for ICMP"
-    echo -e "  • c2 (ofport 102) -> c3 (ofport 103) for TCP"
-    echo -e "  • c3 (ofport 103) -> c1 (ofport 101) for UDP"
-    echo -e "  • All other traffic is dropped"
-    echo -e "\n${CYAN}Run './lab.sh' and choose option 6 to view the flows${NC}"
-}
 
 # =============================================================================
 # Container Management Functions
@@ -1023,13 +1034,12 @@ ${GREEN} 4)${NC} List containers
 ${GREEN} 5)${NC} Test connectivity
 ${BLUE} 6)${NC} Show flows
 ${BLUE} 7)${NC} Flush flows
-${BLUE} 8)${NC} Add learning switch flows
-${BLUE} 9)${NC} Add example flows (fixed ofports)
-${MAGENTA}10)${NC} List playgrounds
-${MAGENTA}11)${NC} Show playground help
-${YELLOW}12)${NC} Setup/Reload lab
-${YELLOW}13)${NC} Destroy lab
-${RED}14)${NC} Exit
+${MAGENTA} 8)${NC} List playgrounds
+${MAGENTA} 9)${NC} Show playground help
+${MAGENTA}10)${NC} Apply playground flows
+${YELLOW}11)${NC} Setup/Reload lab
+${YELLOW}12)${NC} Destroy lab
+${RED}13)${NC} Exit
 ${CYAN}===============================================${NC}
 EOF
 }
@@ -1046,13 +1056,12 @@ handle_menu_choice() {
         5) test_connectivity ;;
         6) show_flows ;;
         7) flush_flows ;;
-        8) add_learning_flows ;;
-        9) add_example_flows ;;
-        10) list_playgrounds ;;
-        11) show_playground_help ;;
-        12) setup_lab ;;
-        13) destroy_lab ;;
-        14) echo -e "\n${GREEN}Goodbye!${NC}"; exit 0 ;;
+        8) list_playgrounds ;;
+        9) show_playground_help ;;
+        10) apply_playground_flows ;;
+        11) setup_lab ;;
+        12) destroy_lab ;;
+        13) echo -e "\n${GREEN}Goodbye!${NC}"; exit 0 ;;
         0)
             log INFO "Exiting $SCRIPT_NAME"
             exit 0
@@ -1065,15 +1074,22 @@ handle_menu_choice() {
 
 # Main interactive loop
 interactive_mode() {
+    log INFO "Entering interactive mode (Ctrl+D to exit)"
     while true; do
+        set +e
         show_menu
-        read -rp "Choice: " choice
-
-        echo # Add spacing
-        handle_menu_choice "$choice"
-
+        if ! read -rp "Choice: " choice; then
+            log INFO "EOF received. Exiting interactive mode."; break
+        fi
+        set -e
         echo
-        read -rp "Press Enter to continue..." _
+        if ! handle_menu_choice "$choice"; then
+            log WARN "Action returned non-zero"
+        fi
+        echo
+        set +e
+        read -rp "Press Enter to continue..." _ || { log INFO "EOF. Bye."; break; }
+        set -e
     done
 }
 
@@ -1132,6 +1148,17 @@ main() {
             exec_container_command "$@"
             exit $?
             ;;
+        flows)
+            check_permissions || exit 1
+            shift || true
+            if [[ -n "${1:-}" ]]; then
+                load_playground "$1" || exit 1
+            else
+                auto_load_current_playground
+            fi
+            apply_playground_flows "$CURRENT_PLAYGROUND"
+            exit 0
+            ;;
         list|--list)
             list_playgrounds
             exit 0
@@ -1145,6 +1172,7 @@ main() {
             echo "  destroy, -d                     Destroy the lab environment"
             echo "  status                          Show lab status"
             echo "  exec [flags] <container> <cmd>  Execute command in container"
+            echo "  flows [PLAYGROUND]              Apply (reload) flows from playground flows/ directory"
             echo "  list                            List available playgrounds"
             echo "  help, -h                        Show this help message"
             echo ""
@@ -1167,6 +1195,7 @@ main() {
             echo "  ./lab.sh exec --tty c1 htop                # Run htop with TTY support"
             echo "  ./lab.sh exec --interactive c1 'cat > file' # Keep STDIN open for input"
             echo "  ./lab.sh list                              # Show available playgrounds"
+            echo "  ./lab.sh flows simple                      # Apply flows of simple playground"
             echo ""
             echo "If no command is provided, interactive mode will start."
             echo ""

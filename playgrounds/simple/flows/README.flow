@@ -1,0 +1,8 @@
+# Flow Files
+# One OpenFlow rule per non-empty, non-comment line.
+# Lines beginning with # are ignored.
+# Example rules (disabled by default):
+# in_port=101,icmp,actions=output:102
+# in_port=102,tcp,actions=output:103
+# in_port=103,udp,actions=output:101
+# priority=0,actions=drop
