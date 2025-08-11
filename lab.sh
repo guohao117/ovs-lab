@@ -502,7 +502,10 @@ setup_lab() {
     # Create bridge if it doesn't exist
     if ! bridge_exists; then
         progress "Creating OVS bridge $BRIDGE_NAME"
-        if ovs-vsctl add-br "$BRIDGE_NAME" &>/dev/null; then
+        # Single transaction: create bridge + set fail_mode + initial playground external_id
+        if ovs-vsctl \
+            -- add-br "$BRIDGE_NAME" \
+            -- set bridge "$BRIDGE_NAME" fail_mode=secure external_ids:playground="${CURRENT_PLAYGROUND:-default}" &>/dev/null; then
             progress_done
             # Setup bridge socket permissions after creation
             setup_bridge_permissions
@@ -611,6 +614,7 @@ apply_playground_flows() {
     log SUCCESS "Flows applied: $applied (failed: $failed)"
     return 0
 }
+
 
 # Cleanup containers and their connections
 cleanup_containers() {
