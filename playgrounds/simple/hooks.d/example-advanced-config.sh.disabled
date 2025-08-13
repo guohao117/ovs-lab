@@ -1,0 +1,38 @@
+#!/bin/bash
+# Example hook that demonstrates proper use of OVS helper functions
+# This shows how to modify bridges safely in playground hooks
+
+# Load the helper functions
+source "${LAB_ROOT}/lib/ovs-helpers.sh"
+
+echo "Setting up advanced bridge configuration..."
+
+# Set OpenFlow protocols to support modern features
+if ovs_bridge_set_protocols "$LAB_BRIDGE" "OpenFlow10,OpenFlow13,OpenFlow14"; then
+    echo "✓ OpenFlow protocols configured"
+else
+    echo "✗ Failed to configure OpenFlow protocols" >&2
+    exit 1
+fi
+
+# Configure bridge metadata
+if ovs_bridge_set_multiple "$LAB_BRIDGE" \
+    "external_ids:playground=$(basename "$PLAYGROUND_DIR")" \
+    "external_ids:lab_version=1.0" \
+    "fail_mode=secure" \
+    "other_config:datapath-type=system"; then
+    echo "✓ Bridge metadata configured"
+else
+    echo "✗ Failed to configure bridge metadata" >&2
+    exit 1
+fi
+
+# Optional: Set controller (if needed)
+# if ovs_bridge_set_controller "$LAB_BRIDGE" "tcp:127.0.0.1:6653"; then
+#     echo "✓ Controller configured"
+# else
+#     echo "✗ Failed to configure controller" >&2
+#     exit 1
+# fi
+
+echo "Advanced bridge configuration completed"

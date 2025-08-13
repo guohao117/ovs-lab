@@ -204,6 +204,14 @@ setup_ovs_permissions() {
 # Setup bridge management socket permissions (called after bridge creation)
 setup_bridge_permissions() {
     local mgmt_sock="/usr/local/var/run/openvswitch/br-lab.mgmt"
+    local max_wait=5
+    local wait_count=0
+
+    # Wait for management socket to be created
+    while [[ ! -S "$mgmt_sock" && $wait_count -lt $max_wait ]]; do
+        sleep 0.5
+        ((wait_count++))
+    done
 
     if [[ -S "$mgmt_sock" ]]; then
         progress "Setting permissions for bridge management socket"
@@ -214,6 +222,8 @@ setup_bridge_permissions() {
             progress_fail
             log WARN "Failed to set bridge management socket permissions"
         fi
+    else
+        log WARN "Bridge management socket not found after ${max_wait} seconds"
     fi
 }
 
@@ -269,7 +279,7 @@ set_container_ofport() {
 set_playground_state() {
     local playground="$1"
     if bridge_exists; then
-        ovs-vsctl set bridge "$BRIDGE_NAME" external_ids:playground="$playground" &>/dev/null
+        ovs_bridge_set_external_id "$BRIDGE_NAME" "playground" "$playground"
         log SUCCESS "Playground state saved: $playground"
     fi
 }
@@ -286,7 +296,7 @@ set_playground_metadata() {
         args+=(external_ids:playground_desc="$desc")
     fi
     if [[ ${#args[@]} -gt 0 ]]; then
-        ovs-vsctl set bridge "$BRIDGE_NAME" "${args[@]}" &>/dev/null || return 0
+        ovs_bridge_set_multiple "$BRIDGE_NAME" "${args[@]}" || return 0
         log DEBUG "Playground metadata annotated"
     fi
 }
@@ -540,6 +550,9 @@ setup_lab() {
 
     # Hooks post-setup
     run_playground_hooks post
+    
+    # Re-setup bridge permissions after post hooks (they may modify bridge config)
+    setup_bridge_permissions
 
     # Apply flows owned by playground (after state & metadata saved)
     apply_playground_flows "$CURRENT_PLAYGROUND"
@@ -597,19 +610,15 @@ apply_playground_flows() {
     flush_flows
     local applied=0 failed=0
     for file in "${flow_files[@]}"; do
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            line="${line%%#*}" # strip trailing comment
-            line="${line//[$'\t\r\n ']}" # trim simple whitespace ends for empty detection
-            if [[ -z "$line" ]]; then
-                continue
-            fi
-            if ovs-ofctl add-flow "$BRIDGE_NAME" "$line" 2>/dev/null; then
-                ((applied++))
-            else
-                log WARN "Failed flow: $line"
-                ((failed++))
-            fi
-        done < "$file"
+        # Use add-flows for better handling of complex flow rules
+        if ovs-ofctl add-flows "$BRIDGE_NAME" "$file" 2>/dev/null; then
+            # Count non-empty, non-comment lines
+            local file_flows=$(grep -v -E '^\s*(#|$)' "$file" | wc -l)
+            ((applied += file_flows))
+        else
+            log WARN "Failed to apply flows from: $file"
+            ((failed++))
+        fi
     done
     log SUCCESS "Flows applied: $applied (failed: $failed)"
     return 0

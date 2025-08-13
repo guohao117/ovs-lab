@@ -1,0 +1,17 @@
+# OpenFlow ARP Proxy - Switch responds to ARP requests directly
+# Uses NXM field manipulation to craft ARP replies without forwarding to containers
+
+# ARP proxy for c1 (10.0.0.1) - Generate ARP reply with MAC 02:00:00:00:01:01
+table=0,priority=200,arp,arp_op=1,arp_tpa=10.0.0.1,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x020000000101->NXM_NX_ARP_SHA[],load:0x0a000001->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x020000000101->NXM_OF_ETH_SRC[],IN_PORT
+
+# ARP proxy for c2 (10.0.0.2) - Generate ARP reply with MAC 02:00:00:00:01:02  
+table=0,priority=200,arp,arp_op=1,arp_tpa=10.0.0.2,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x020000000102->NXM_NX_ARP_SHA[],load:0x0a000002->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x020000000102->NXM_OF_ETH_SRC[],IN_PORT
+
+# ARP proxy for c3 (10.0.0.3) - Generate ARP reply with MAC 02:00:00:00:01:03
+table=0,priority=200,arp,arp_op=1,arp_tpa=10.0.0.3,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x020000000103->NXM_NX_ARP_SHA[],load:0x0a000003->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x020000000103->NXM_OF_ETH_SRC[],IN_PORT
+
+# Drop unknown ARP requests (no proxy response for unknown IPs)
+table=0,priority=150,arp,arp_op=1,actions=drop
+
+# Allow all other traffic through normal L2 learning
+table=0,priority=50,actions=normal

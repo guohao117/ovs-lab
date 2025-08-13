@@ -6,6 +6,112 @@
 # Common utility functions for low-level OVS operations
 # =============================================================================
 
+# Setup bridge management socket permissions (internal helper)
+_setup_bridge_permissions() {
+    local bridge_name="${1:-br-lab}"
+    local mgmt_sock="/usr/local/var/run/openvswitch/${bridge_name}.mgmt"
+    local max_wait=5
+    local wait_count=0
+    local real_user="${SUDO_USER:-$USER}"
+
+    # Wait for management socket to be created
+    while [[ ! -S "$mgmt_sock" && $wait_count -lt $max_wait ]]; do
+        sleep 0.5
+        ((wait_count++))
+    done
+
+    if [[ -S "$mgmt_sock" ]]; then
+        sudo chown :"$real_user" "$mgmt_sock" && sudo chmod g+rw "$mgmt_sock" 2>/dev/null || true
+    fi
+}
+
+# Safe bridge configuration function - automatically handles permissions
+# Usage: ovs_bridge_set <bridge_name> <key> <value>
+ovs_bridge_set() {
+    local bridge_name="$1"
+    local key="$2"
+    local value="$3"
+    
+    if [[ -z "$bridge_name" || -z "$key" || -z "$value" ]]; then
+        echo "Error: Usage: ovs_bridge_set <bridge_name> <key> <value>" >&2
+        return 1
+    fi
+    
+    # Execute the bridge modification
+    local result=0
+    ovs-vsctl set bridge "$bridge_name" "$key=$value" &>/dev/null || result=$?
+    
+    # Re-setup permissions after any bridge modification
+    _setup_bridge_permissions "$bridge_name"
+    
+    return $result
+}
+
+# Safe bridge external_ids set function
+# Usage: ovs_bridge_set_external_id <bridge_name> <key> <value>
+ovs_bridge_set_external_id() {
+    local bridge_name="$1"
+    local key="$2"
+    local value="$3"
+    
+    if [[ -z "$bridge_name" || -z "$key" || -z "$value" ]]; then
+        echo "Error: Usage: ovs_bridge_set_external_id <bridge_name> <key> <value>" >&2
+        return 1
+    fi
+    
+    # Execute the bridge modification
+    local result=0
+    ovs-vsctl set bridge "$bridge_name" "external_ids:$key=$value" &>/dev/null || result=$?
+    
+    # Re-setup permissions after any bridge modification
+    _setup_bridge_permissions "$bridge_name"
+    
+    return $result
+}
+
+# Safe bridge protocols set function
+# Usage: ovs_bridge_set_protocols <bridge_name> <protocols>
+# Example: ovs_bridge_set_protocols br-lab "OpenFlow10,OpenFlow13"
+ovs_bridge_set_protocols() {
+    local bridge_name="$1"
+    local protocols="$2"
+    
+    if [[ -z "$bridge_name" || -z "$protocols" ]]; then
+        echo "Error: Usage: ovs_bridge_set_protocols <bridge_name> <protocols>" >&2
+        return 1
+    fi
+    
+    # Execute the bridge modification
+    local result=0
+    ovs-vsctl set bridge "$bridge_name" "protocols=$protocols" &>/dev/null || result=$?
+    
+    # Re-setup permissions after any bridge modification
+    _setup_bridge_permissions "$bridge_name"
+    
+    return $result
+}
+
+# Safe bridge multiple properties set function
+# Usage: ovs_bridge_set_multiple <bridge_name> <key1=value1> <key2=value2> ...
+ovs_bridge_set_multiple() {
+    local bridge_name="$1"
+    shift
+    
+    if [[ -z "$bridge_name" || $# -eq 0 ]]; then
+        echo "Error: Usage: ovs_bridge_set_multiple <bridge_name> <key1=value1> ..." >&2
+        return 1
+    fi
+    
+    # Execute the bridge modification
+    local result=0
+    ovs-vsctl set bridge "$bridge_name" "$@" &>/dev/null || result=$?
+    
+    # Re-setup permissions after any bridge modification
+    _setup_bridge_permissions "$bridge_name"
+    
+    return $result
+}
+
 # Get the actual OVS port name for a container
 # Usage: get_port_name <container_name>
 get_port_name() {
