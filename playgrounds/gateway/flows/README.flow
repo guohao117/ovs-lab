@@ -1,0 +1,134 @@
+# Gateway Playground OpenFlow Rules
+# =================================
+
+This directory contains OpenFlow rules for implementing a 2-layer gateway
+that connects two subnets (10.10.0.0/24 and 10.20.0.0/24) using pure
+OpenFlow without external controllers.
+
+## Files
+
+- `gateway-l2l3.flow` - Main gateway implementation with L2/L3 forwarding
+
+## Gateway Architecture
+
+The gateway implementation provides:
+
+1. **ARP Proxy Service**: Responds to ARP requests for all managed IPs
+2. **L2 Forwarding**: Direct MAC-based forwarding within subnets
+3. **L3 Routing**: IP-based routing between subnets via gateway
+4. **MAC Rewriting**: Proper L2/L3 boundary handling
+
+## Flow Table Structure
+
+### Priority Levels
+
+- **300**: Gateway ARP proxy (highest priority)
+- **250**: Container ARP proxy
+- **200**: Cross-subnet L3 routing
+- **190**: Gateway L3 forwarding with MAC rewrite
+- **180**: Traffic to gateway IPs
+- **150**: Intra-subnet L2 forwarding
+- **100**: Security drop rules
+- **80**: Drop unknown ARP requests
+- **50**: Flood broadcast/multicast
+- **10**: Default drop (lowest priority)
+
+### Rule Categories
+
+#### ARP Proxy Rules (Priority 300-250)
+- Gateway responds to ARP requests for all managed IPs
+- Provides consistent MAC addresses for reliable networking
+- Eliminates need for container-based ARP resolution
+
+#### L3 Routing Rules (Priority 200-190)
+- Cross-subnet traffic routed through gateway
+- MAC rewriting for proper L2/L3 boundaries
+- Bidirectional routing between subnets
+
+#### L2 Forwarding Rules (Priority 150)
+- Direct MAC-based forwarding within same subnet
+- Efficient intra-subnet communication
+- No gateway involvement for local traffic
+
+#### Security Rules (Priority 100-80)
+- Drop direct cross-subnet L2 attempts
+- Force all inter-subnet traffic through gateway
+- Drop unknown ARP requests
+
+## Traffic Flows
+
+### Intra-Subnet Communication
+```
+gw-c1 (10.10.0.1) → gw-c2 (10.10.0.2)
+1. ARP for 10.10.0.2 → Switch responds with 02:10:00:00:00:02
+2. IP packet with dst MAC 02:10:00:00:00:02 → Direct L2 forward to port 11
+```
+
+### Inter-Subnet Communication
+```
+gw-c1 (10.10.0.1) → gw-c3 (10.20.0.1)
+1. ARP for 10.10.0.254 (gateway) → Switch responds with 02:ff:00:00:00:fe
+2. IP packet to 10.20.0.1 with gateway MAC → Route to gateway (port 254)
+3. Gateway processes and forwards → MAC rewrite to 02:20:00:00:00:01, send to port 20
+```
+
+## Testing the Implementation
+
+### Basic Connectivity Tests
+```bash
+# Same subnet (L2 forwarding)
+./lab.sh exec gw-c1 ping 10.10.0.2
+
+# Cross subnet (L3 routing)
+./lab.sh exec gw-c1 ping 10.20.0.1
+
+# Gateway reachability
+./lab.sh exec gw-c1 ping 10.10.0.254
+```
+
+### Debug Commands
+```bash
+# View all flows
+ovs-ofctl dump-flows br-lab
+
+# View flow statistics
+ovs-ofctl dump-flows br-lab | grep -E "(arp|nw_dst)"
+
+# Monitor traffic
+./lab.sh exec --tty gw-gateway tcpdump -i eth0 -n
+```
+
+## Expected Behavior
+
+- ✅ Same subnet connectivity works via L2 forwarding
+- ✅ Cross subnet connectivity works via L3 routing through gateway
+- ✅ ARP resolution is handled by OpenFlow (no container involvement)
+- ✅ Gateway MAC rewriting ensures proper L2/L3 boundaries
+- ✅ Security rules prevent direct cross-subnet L2 attempts
+- ✅ All traffic flows are deterministic and observable
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Cross-subnet ping fails**
+   - Check gateway IP configuration: `docker exec gw-gateway ip addr`
+   - Verify routes: `./lab.sh exec gw-c1 ip route`
+   - Check flow rules: `ovs-ofctl dump-flows br-lab | grep nw_dst`
+
+2. **ARP resolution fails**
+   - Verify ARP proxy rules: `ovs-ofctl dump-flows br-lab | grep arp`
+   - Check MAC addresses: `./lab.sh exec gw-c1 arp -a`
+
+3. **Gateway not reachable**
+   - Check gateway container: `docker exec gw-gateway ip addr`
+   - Verify gateway forwarding: `docker exec gw-gateway sysctl net.ipv4.ip_forward`
+
+### Debug Flow Matching
+```bash
+# Test specific flow matching
+ovs-appctl ofproto/trace br-lab in_port=10,dl_src=02:10:00:00:00:01,dl_dst=02:ff:00:00:00:fe,nw_src=10.10.0.1,nw_dst=10.20.0.1
+
+# Monitor flow statistics
+watch -n 1 'ovs-ofctl dump-flows br-lab | grep -E "(arp|nw_dst)" | head -20'
+```

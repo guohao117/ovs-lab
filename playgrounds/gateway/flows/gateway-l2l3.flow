@@ -1,0 +1,93 @@
+# Pure OpenFlow 2-Layer Gateway Rules
+# Implements L2/L3 gateway functionality connecting subnets 10.10.0.0/24 and 10.20.0.0/24
+# All gateway functionality implemented in OpenFlow - no container-based gateway
+
+# =============================================================================
+# ARP Proxy Rules for Gateway IPs (Highest Priority)
+# =============================================================================
+
+# ARP proxy for gateway in subnet 10.10.0.0/24 (10.10.0.254)
+table=0,priority=300,arp,arp_op=1,arp_tpa=10.10.0.254,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x02ff0000000fe->NXM_NX_ARP_SHA[],load:0x0a0a00fe->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x02ff0000000fe->NXM_OF_ETH_SRC[],IN_PORT
+
+# ARP proxy for gateway in subnet 10.20.0.0/24 (10.20.0.254)
+table=0,priority=300,arp,arp_op=1,arp_tpa=10.20.0.254,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x02ff0000000fe->NXM_NX_ARP_SHA[],load:0x0a1400fe->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x02ff0000000fe->NXM_OF_ETH_SRC[],IN_PORT
+
+# =============================================================================
+# ARP Proxy Rules for Container IPs
+# =============================================================================
+
+# ARP proxy for c1 (10.10.0.1)
+table=0,priority=250,arp,arp_op=1,arp_tpa=10.10.0.1,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x021000000001->NXM_NX_ARP_SHA[],load:0x0a0a0001->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x021000000001->NXM_OF_ETH_SRC[],IN_PORT
+
+# ARP proxy for c2 (10.10.0.2)
+table=0,priority=250,arp,arp_op=1,arp_tpa=10.10.0.2,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x021000000002->NXM_NX_ARP_SHA[],load:0x0a0a0002->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x021000000002->NXM_OF_ETH_SRC[],IN_PORT
+
+# ARP proxy for c3 (10.20.0.1)
+table=0,priority=250,arp,arp_op=1,arp_tpa=10.20.0.1,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x022000000001->NXM_NX_ARP_SHA[],load:0x0a140001->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x022000000001->NXM_OF_ETH_SRC[],IN_PORT
+
+# ARP proxy for c4 (10.20.0.2)
+table=0,priority=250,arp,arp_op=1,arp_tpa=10.20.0.2,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x022000000002->NXM_NX_ARP_SHA[],load:0x0a140002->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x022000000002->NXM_OF_ETH_SRC[],IN_PORT
+
+# =============================================================================
+# Pure OpenFlow L3 Routing Rules for Cross-Subnet Traffic (High Priority)
+# =============================================================================
+
+# Route traffic from 10.10.0.0/24 to specific hosts in 10.20.0.0/24
+# Direct OpenFlow routing with MAC rewriting and TTL decrement
+table=0,priority=200,ip,nw_src=10.10.0.0/24,nw_dst=10.20.0.1,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:20:00:00:00:01,dec_ttl,output:20
+table=0,priority=200,ip,nw_src=10.10.0.0/24,nw_dst=10.20.0.2,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:20:00:00:00:02,dec_ttl,output:21
+
+# Route traffic from 10.20.0.0/24 to specific hosts in 10.10.0.0/24
+# Direct OpenFlow routing with MAC rewriting and TTL decrement
+table=0,priority=200,ip,nw_src=10.20.0.0/24,nw_dst=10.10.0.1,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:10:00:00:00:01,dec_ttl,output:10
+table=0,priority=200,ip,nw_src=10.20.0.0/24,nw_dst=10.10.0.2,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:10:00:00:00:02,dec_ttl,output:11
+
+# =============================================================================
+# L2 Forwarding Rules for Intra-Subnet Traffic
+# =============================================================================
+
+# Direct L2 forwarding within subnet 10.10.0.0/24
+table=0,priority=150,dl_dst=02:10:00:00:00:01,actions=output:10
+table=0,priority=150,dl_dst=02:10:00:00:00:02,actions=output:11
+
+# Direct L2 forwarding within subnet 10.20.0.0/24
+table=0,priority=150,dl_dst=02:20:00:00:00:01,actions=output:20
+table=0,priority=150,dl_dst=02:20:00:00:00:02,actions=output:21
+
+# Traffic to gateway MAC is handled by routing rules above (no gateway container)
+
+# =============================================================================
+# Traffic to Virtual Gateway IPs (OpenFlow Response)
+# =============================================================================
+
+# Traffic to gateway IPs gets ICMP unreachable response (gateway virtualized)
+# For now, drop traffic to gateway IPs since they're virtual
+table=0,priority=180,ip,nw_dst=10.10.0.254,actions=drop
+table=0,priority=180,ip,nw_dst=10.20.0.254,actions=drop
+
+# =============================================================================
+# Drop Rules for Security and Isolation
+# =============================================================================
+
+# Drop direct L2 attempts between different subnets (bypass gateway)
+table=0,priority=100,dl_src=02:10:00:00:00:01,dl_dst=02:20:00:00:00:01,actions=drop
+table=0,priority=100,dl_src=02:10:00:00:00:01,dl_dst=02:20:00:00:00:02,actions=drop
+table=0,priority=100,dl_src=02:10:00:00:00:02,dl_dst=02:20:00:00:00:01,actions=drop
+table=0,priority=100,dl_src=02:10:00:00:00:02,dl_dst=02:20:00:00:00:02,actions=drop
+table=0,priority=100,dl_src=02:20:00:00:00:01,dl_dst=02:10:00:00:00:01,actions=drop
+table=0,priority=100,dl_src=02:20:00:00:00:01,dl_dst=02:10:00:00:00:02,actions=drop
+table=0,priority=100,dl_src=02:20:00:00:00:02,dl_dst=02:10:00:00:00:01,actions=drop
+table=0,priority=100,dl_src=02:20:00:00:00:02,dl_dst=02:10:00:00:00:02,actions=drop
+
+# Drop unknown ARP requests (not for our managed IPs)
+table=0,priority=80,arp,arp_op=1,actions=drop
+
+# =============================================================================
+# Default Rules (Lowest Priority)
+# =============================================================================
+
+# Default: flood for unknown destinations (broadcast, multicast)
+table=0,priority=50,dl_dst=01:00:00:00:00:00/01:00:00:00:00:00,actions=flood
+
+# Default: drop unknown unicast (should not happen with proper ARP proxy)
+table=0,priority=10,actions=drop
