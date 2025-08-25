@@ -13,5 +13,15 @@ table=0,priority=200,arp,arp_op=1,arp_tpa=10.0.0.3,actions=load:2->NXM_OF_ARP_OP
 # Drop unknown ARP requests (no proxy response for unknown IPs)
 table=0,priority=150,arp,arp_op=1,actions=drop
 
-# Allow all other traffic through normal L2 learning
-table=0,priority=50,actions=normal
+# MAC-based forwarding rules (replace normal L2 learning)
+# Forward to c1 (ofport 101) when destination MAC is 02:00:00:00:01:01
+table=0,priority=100,dl_dst=02:00:00:00:01:01,actions=output:101
+
+# Forward to c2 (ofport 102) when destination MAC is 02:00:00:00:01:02
+table=0,priority=100,dl_dst=02:00:00:00:01:02,actions=output:102
+
+# Forward to c3 (ofport 103) when destination MAC is 02:00:00:00:01:03
+table=0,priority=100,dl_dst=02:00:00:00:01:03,actions=output:103
+
+# Default: flood unknown destinations (broadcast, multicast, unknown unicast)
+table=0,priority=50,actions=flood
