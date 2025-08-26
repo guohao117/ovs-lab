@@ -16,17 +16,8 @@ table=0,priority=300,arp,arp_op=1,arp_tpa=10.20.0.254,actions=load:2->NXM_OF_ARP
 # ARP Proxy Rules for Container IPs
 # =============================================================================
 
-# ARP proxy for c1 (10.10.0.1)
-table=0,priority=250,arp,arp_op=1,arp_tpa=10.10.0.1,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x021000000001->NXM_NX_ARP_SHA[],load:0x0a0a0001->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x021000000001->NXM_OF_ETH_SRC[],IN_PORT
-
-# ARP proxy for c2 (10.10.0.2)
-table=0,priority=250,arp,arp_op=1,arp_tpa=10.10.0.2,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x021000000002->NXM_NX_ARP_SHA[],load:0x0a0a0002->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x021000000002->NXM_OF_ETH_SRC[],IN_PORT
-
-# ARP proxy for c3 (10.20.0.1)
-table=0,priority=250,arp,arp_op=1,arp_tpa=10.20.0.1,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x022000000001->NXM_NX_ARP_SHA[],load:0x0a140001->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x022000000001->NXM_OF_ETH_SRC[],IN_PORT
-
-# ARP proxy for c4 (10.20.0.2)
-table=0,priority=250,arp,arp_op=1,arp_tpa=10.20.0.2,actions=load:2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x022000000002->NXM_NX_ARP_SHA[],load:0x0a140002->NXM_OF_ARP_SPA[],move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x022000000002->NXM_OF_ETH_SRC[],IN_PORT
+# Container ARP requests are handled by flooding - containers respond directly
+# No explicit ARP proxy rules needed for containers
 
 # =============================================================================
 # Pure OpenFlow L3 Routing Rules for Cross-Subnet Traffic (High Priority)
@@ -78,8 +69,8 @@ table=0,priority=180,ip,nw_dst=10.20.0.254,actions=drop
 table=0,priority=150,dl_src=02:10:00:00:00:00/ff:ff:00:00:00:00,dl_dst=02:20:00:00:00:00/ff:ff:00:00:00:00,actions=drop
 table=0,priority=150,dl_src=02:20:00:00:00:00/ff:ff:00:00:00:00,dl_dst=02:10:00:00:00:00/ff:ff:00:00:00:00,actions=drop
 
-# Drop unknown ARP requests (not for our managed IPs)
-table=0,priority=100,arp,arp_op=1,actions=drop
+# Unknown ARP requests are handled by flooding (priority 50 rule below)
+# This allows containers to respond to ARP requests naturally
 
 # =============================================================================
 # Default Rules (Lowest Priority)
