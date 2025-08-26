@@ -130,6 +130,7 @@ Containers:
 
 Pure OpenFlow Gateway Features:
   • Virtual ARP proxy for gateway IPs (10.10.0.254, 10.20.0.254)
+  • ICMP echo reply for gateway IPs (ping/traceroute support)
   • MAC-based L2 forwarding within subnets
   • OpenFlow-based L3 routing between subnets (no container forwarding)
   • MAC rewriting and TTL decrement in OpenFlow pipeline
@@ -156,7 +157,7 @@ Testing scenarios:
   ./lab.sh exec c1 ping -c 3 10.20.0.1
   ./lab.sh exec c3 ping -c 3 10.10.0.1
 
-  # Test gateway reachability
+  # Test gateway reachability (ICMP echo reply)
   ./lab.sh exec c1 ping -c 3 10.10.0.254
   ./lab.sh exec c3 ping -c 3 10.20.0.254
 
@@ -180,6 +181,7 @@ Advanced testing:
 
 Key OpenFlow implementation details:
   • High priority ARP proxy rules for gateway IPs (.254)
+  • ICMP echo reply rules for gateway reachability testing
   • MAC learning and forwarding for L2 traffic within subnets
   • IP routing rules for cross-subnet traffic via gateway
   • MAC rewriting for proper L2/L3 boundary handling

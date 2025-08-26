@@ -32,27 +32,27 @@ table=0,priority=250,arp,arp_op=1,arp_tpa=10.20.0.2,actions=load:2->NXM_OF_ARP_O
 # Pure OpenFlow L3 Routing Rules for Cross-Subnet Traffic (High Priority)
 # =============================================================================
 
-# Route traffic from 10.10.0.0/24 to specific hosts in 10.20.0.0/24
-# Direct OpenFlow routing with MAC rewriting and TTL decrement
-table=0,priority=200,ip,nw_src=10.10.0.0/24,nw_dst=10.20.0.1,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:20:00:00:00:01,dec_ttl,output:20
-table=0,priority=200,ip,nw_src=10.10.0.0/24,nw_dst=10.20.0.2,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:20:00:00:00:02,dec_ttl,output:21
+# Route traffic destined to gateway MAC from 10.10.0.0/24 to 10.20.0.0/24
+table=0,priority=220,ip,dl_dst=02:ff:00:00:00:fe,nw_src=10.10.0.0/24,nw_dst=10.20.0.1,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:20:00:00:00:01,dec_ttl,output:20
+table=0,priority=220,ip,dl_dst=02:ff:00:00:00:fe,nw_src=10.10.0.0/24,nw_dst=10.20.0.2,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:20:00:00:00:02,dec_ttl,output:21
+table=0,priority=220,ip,dl_dst=02:ff:00:00:00:fe,nw_src=10.10.0.0/24,nw_dst=10.20.0.0/24,actions=drop  # Drop traffic to unknown hosts in 10.20.0.0/24
 
-# Route traffic from 10.20.0.0/24 to specific hosts in 10.10.0.0/24
-# Direct OpenFlow routing with MAC rewriting and TTL decrement
-table=0,priority=200,ip,nw_src=10.20.0.0/24,nw_dst=10.10.0.1,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:10:00:00:00:01,dec_ttl,output:10
-table=0,priority=200,ip,nw_src=10.20.0.0/24,nw_dst=10.10.0.2,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:10:00:00:00:02,dec_ttl,output:11
+# Route traffic destined to gateway MAC from 10.20.0.0/24 to 10.10.0.0/24
+table=0,priority=220,ip,dl_dst=02:ff:00:00:00:fe,nw_src=10.20.0.0/24,nw_dst=10.10.0.1,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:10:00:00:00:01,dec_ttl,output:10
+table=0,priority=220,ip,dl_dst=02:ff:00:00:00:fe,nw_src=10.20.0.0/24,nw_dst=10.10.0.2,actions=mod_dl_src:02:ff:00:00:00:fe,mod_dl_dst:02:10:00:00:00:02,dec_ttl,output:11
+table=0,priority=220,ip,dl_dst=02:ff:00:00:00:fe,nw_src=10.20.0.0/24,nw_dst=10.10.0.0/24,actions=drop  # Drop traffic to unknown hosts in 10.10.0.0/24
 
 # =============================================================================
 # L2 Forwarding Rules for Intra-Subnet Traffic
 # =============================================================================
 
 # Direct L2 forwarding within subnet 10.10.0.0/24
-table=0,priority=150,dl_dst=02:10:00:00:00:01,actions=output:10
-table=0,priority=150,dl_dst=02:10:00:00:00:02,actions=output:11
+table=0,priority=200,dl_dst=02:10:00:00:00:01,actions=output:10
+table=0,priority=200,dl_dst=02:10:00:00:00:02,actions=output:11
 
 # Direct L2 forwarding within subnet 10.20.0.0/24
-table=0,priority=150,dl_dst=02:20:00:00:00:01,actions=output:20
-table=0,priority=150,dl_dst=02:20:00:00:00:02,actions=output:21
+table=0,priority=200,dl_dst=02:20:00:00:00:01,actions=output:20
+table=0,priority=200,dl_dst=02:20:00:00:00:02,actions=output:21
 
 # Traffic to gateway MAC is handled by routing rules above (no gateway container)
 
@@ -60,8 +60,13 @@ table=0,priority=150,dl_dst=02:20:00:00:00:02,actions=output:21
 # Traffic to Virtual Gateway IPs (OpenFlow Response)
 # =============================================================================
 
-# Traffic to gateway IPs gets ICMP unreachable response (gateway virtualized)
-# For now, drop traffic to gateway IPs since they're virtual
+# ICMP echo request to gateway IPs gets echo reply (gateway virtualized)
+table=0,priority=220,icmp,icmp_type=8,nw_dst=10.10.0.254,actions=move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x02ff0000000fe->NXM_OF_ETH_SRC[],move:NXM_OF_IP_SRC[]->NXM_OF_IP_DST[],load:0x0a0a00fe->NXM_OF_IP_SRC[],load:0->NXM_OF_ICMP_TYPE[],dec_ttl,IN_PORT
+table=0,priority=220,icmp,icmp_type=8,nw_dst=10.20.0.254,actions=move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],load:0x02ff0000000fe->NXM_OF_ETH_SRC[],move:NXM_OF_IP_SRC[]->NXM_OF_IP_DST[],load:0x0a1400fe->NXM_OF_IP_SRC[],load:0->NXM_OF_ICMP_TYPE[],dec_ttl,IN_PORT
+
+
+
+# Drop other traffic to gateway IPs (non-ICMP echo)
 table=0,priority=180,ip,nw_dst=10.10.0.254,actions=drop
 table=0,priority=180,ip,nw_dst=10.20.0.254,actions=drop
 
@@ -70,17 +75,11 @@ table=0,priority=180,ip,nw_dst=10.20.0.254,actions=drop
 # =============================================================================
 
 # Drop direct L2 attempts between different subnets (bypass gateway)
-table=0,priority=100,dl_src=02:10:00:00:00:01,dl_dst=02:20:00:00:00:01,actions=drop
-table=0,priority=100,dl_src=02:10:00:00:00:01,dl_dst=02:20:00:00:00:02,actions=drop
-table=0,priority=100,dl_src=02:10:00:00:00:02,dl_dst=02:20:00:00:00:01,actions=drop
-table=0,priority=100,dl_src=02:10:00:00:00:02,dl_dst=02:20:00:00:00:02,actions=drop
-table=0,priority=100,dl_src=02:20:00:00:00:01,dl_dst=02:10:00:00:00:01,actions=drop
-table=0,priority=100,dl_src=02:20:00:00:00:01,dl_dst=02:10:00:00:00:02,actions=drop
-table=0,priority=100,dl_src=02:20:00:00:00:02,dl_dst=02:10:00:00:00:01,actions=drop
-table=0,priority=100,dl_src=02:20:00:00:00:02,dl_dst=02:10:00:00:00:02,actions=drop
+table=0,priority=150,dl_src=02:10:00:00:00:00/ff:ff:00:00:00:00,dl_dst=02:20:00:00:00:00/ff:ff:00:00:00:00,actions=drop
+table=0,priority=150,dl_src=02:20:00:00:00:00/ff:ff:00:00:00:00,dl_dst=02:10:00:00:00:00/ff:ff:00:00:00:00,actions=drop
 
 # Drop unknown ARP requests (not for our managed IPs)
-table=0,priority=80,arp,arp_op=1,actions=drop
+table=0,priority=100,arp,arp_op=1,actions=drop
 
 # =============================================================================
 # Default Rules (Lowest Priority)

@@ -161,10 +161,10 @@ test_intra_subnet_connectivity() {
 test_gateway_reachability() {
     print_header "Virtual Gateway Reachability"
 
-    # In pure OpenFlow implementation, gateway IPs are virtual and dropped
-    # Test that gateway IPs are not reachable (expected behavior)
-    test_ping "gw-c1" "10.10.0.254" 1 "gw-c1 → virtual gateway (should fail)"
-    test_ping "gw-c3" "10.20.0.254" 1 "gw-c3 → virtual gateway (should fail)"
+    # In pure OpenFlow implementation, gateway IPs are virtual but respond to ICMP
+    # Test that gateway IPs are reachable (expected behavior)
+    test_ping "gw-c1" "10.10.0.254" 0 "gw-c1 → virtual gateway (should succeed)"
+    test_ping "gw-c3" "10.20.0.254" 0 "gw-c3 → virtual gateway (should succeed)"
 }
 
 # Test inter-subnet connectivity (L3 routing)
@@ -230,7 +230,7 @@ test_openflow_rules() {
 
     # Check for specific gateway rules
     run_test "Gateway ARP proxy rules exist" "ovs-ofctl dump-flows br-lab | grep -q 'arp_tpa=10\\.[12][02]\\.0\\.254'"
-    run_test "Cross-subnet routing rules exist" "ovs-ofctl dump-flows br-lab | grep -q 'nw_src=10\\.10\\.0\\.0/24.*nw_dst=10\\.20\\.0\\.0/24'"
+    run_test "Cross-subnet routing rules exist" "ovs-ofctl dump-flows br-lab | grep -q 'dl_dst=02:ff:00:00:00:fe.*nw_src=10\\.10\\.0\\.0/24'"
 }
 
 # Performance test

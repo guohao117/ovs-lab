@@ -73,17 +73,40 @@ else
     echo -e "${RED}  No ARP proxy rules found${NC}"
 fi
 
+# ICMP Gateway Response Rules
+print_subheader "ICMP Gateway Response Rules (Priority 220)"
+echo "Virtual gateway responds to ICMP echo requests:"
+
+icmp_flows=$(ovs-ofctl dump-flows "$BRIDGE_NAME" | grep "icmp,icmp_type=8" | sort -rn -k2 -t,)
+if [[ -n "$icmp_flows" ]]; then
+    echo "$icmp_flows" | while IFS= read -r flow; do
+        if echo "$flow" | grep -q "nw_dst=10.10.0.254"; then
+            print_rule "220" "ICMP echo reply for 10.10.0.254" "$(echo $flow | cut -d' ' -f2-)"
+        elif echo "$flow" | grep -q "nw_dst=10.20.0.254"; then
+            print_rule "220" "ICMP echo reply for 10.20.0.254" "$(echo $flow | cut -d' ' -f2-)"
+        fi
+    done
+else
+    echo -e "${RED}  No ICMP response rules found${NC}"
+fi
+
 # L3 Routing Rules
-print_subheader "L3 Routing Rules (Priority 200-190)"
+print_subheader "L3 Routing Rules (Priority 220)"
 echo "Cross-subnet traffic is routed through the gateway:"
 
-l3_flows=$(ovs-ofctl dump-flows "$BRIDGE_NAME" | grep -E "nw_src=10\.(10|20)\.0\.0/24.*nw_dst=10\.(10|20)\.0\.0/24" | sort -rn -k2 -t,)
+l3_flows=$(ovs-ofctl dump-flows "$BRIDGE_NAME" | grep -E "dl_dst=02:ff:00:00:00:fe.*nw_src=10\.(10|20)\.0\.0/24" | sort -rn -k2 -t,)
 if [[ -n "$l3_flows" ]]; then
     echo "$l3_flows" | while IFS= read -r flow; do
-        if echo "$flow" | grep -q "nw_src=10.10.0.0/24,nw_dst=10.20.0.0/24"; then
-            print_rule "200" "Route 10.10.0.0/24 → 10.20.0.0/24" "$(echo $flow | cut -d' ' -f2-)"
-        elif echo "$flow" | grep -q "nw_src=10.20.0.0/24,nw_dst=10.10.0.0/24"; then
-            print_rule "200" "Route 10.20.0.0/24 → 10.10.0.0/24" "$(echo $flow | cut -d' ' -f2-)"
+        if echo "$flow" | grep -q "nw_src=10.10.0.0/24.*nw_dst=10.20.0.1"; then
+            print_rule "220" "Route 10.10.0.0/24 → gw-c3 (10.20.0.1)" "$(echo $flow | cut -d' ' -f2-)"
+        elif echo "$flow" | grep -q "nw_src=10.10.0.0/24.*nw_dst=10.20.0.2"; then
+            print_rule "220" "Route 10.10.0.0/24 → gw-c4 (10.20.0.2)" "$(echo $flow | cut -d' ' -f2-)"
+        elif echo "$flow" | grep -q "nw_src=10.20.0.0/24.*nw_dst=10.10.0.1"; then
+            print_rule "220" "Route 10.20.0.0/24 → gw-c1 (10.10.0.1)" "$(echo $flow | cut -d' ' -f2-)"
+        elif echo "$flow" | grep -q "nw_src=10.20.0.0/24.*nw_dst=10.10.0.2"; then
+            print_rule "220" "Route 10.20.0.0/24 → gw-c2 (10.10.0.2)" "$(echo $flow | cut -d' ' -f2-)"
+        elif echo "$flow" | grep -q "actions=drop"; then
+            print_rule "220" "Drop unknown cross-subnet traffic" "$(echo $flow | cut -d' ' -f2-)"
         fi
     done
 else
@@ -105,7 +128,7 @@ if [[ -n "$gw_flows" ]]; then
 fi
 
 # L2 Forwarding Rules
-print_subheader "L2 Forwarding Rules (Priority 150)"
+print_subheader "L2 Forwarding Rules (Priority 200)"
 echo "Direct MAC-based forwarding within subnets:"
 
 l2_flows=$(ovs-ofctl dump-flows "$BRIDGE_NAME" | grep -E "dl_dst=02:(10|20|ff)" | sort -rn -k2 -t,)
@@ -118,9 +141,9 @@ if [[ -n "$l2_flows" ]]; then
         elif echo "$flow" | grep -q "dl_dst=02:20:00:00:00:01"; then
             print_rule "150" "Forward to gw-c3 (02:20:00:00:00:01)" "$(echo $flow | cut -d' ' -f2-)"
         elif echo "$flow" | grep -q "dl_dst=02:20:00:00:00:02"; then
-            print_rule "150" "Forward to gw-c4 (02:20:00:00:00:02)" "$(echo $flow | cut -d' ' -f2-)"
+            print_rule "200" "Forward to gw-c4 (02:20:00:00:00:02)" "$(echo $flow | cut -d' ' -f2-)"
         elif echo "$flow" | grep -q "dl_dst=02:ff:00:00:00:fe"; then
-            print_rule "150" "Forward to gateway (02:ff:00:00:00:fe)" "$(echo $flow | cut -d' ' -f2-)"
+            print_rule "200" "Forward to gateway (02:ff:00:00:00:fe)" "$(echo $flow | cut -d' ' -f2-)"
         fi
     done
 else
@@ -128,18 +151,18 @@ else
 fi
 
 # Security Rules
-print_subheader "Security Rules (Priority 100-80)"
+print_subheader "Security Rules (Priority 150-100)"
 echo "Traffic isolation and security policies:"
 
 drop_flows=$(ovs-ofctl dump-flows "$BRIDGE_NAME" | grep "actions=drop" | sort -rn -k2 -t,)
 drop_count=$(echo "$drop_flows" | wc -l)
 if [[ $drop_count -gt 0 ]]; then
-    echo -e "${YELLOW}Priority 100:${NC} Drop direct cross-subnet L2 attempts (${drop_count} rules)"
+    echo -e "${YELLOW}Priority 150:${NC} Drop direct cross-subnet L2 attempts (${drop_count} rules)"
     echo -e "${GREEN}  Prevents bypassing gateway for inter-subnet communication${NC}"
 
     unknown_arp=$(echo "$drop_flows" | grep "arp,arp_op=1" | head -1)
     if [[ -n "$unknown_arp" ]]; then
-        print_rule "80" "Drop unknown ARP requests" "$(echo $unknown_arp | cut -d' ' -f2-)"
+        print_rule "100" "Drop unknown ARP requests" "$(echo $unknown_arp | cut -d' ' -f2-)"
     fi
 else
     echo -e "${RED}  No security rules found${NC}"
